@@ -20,7 +20,7 @@ def get_requirements(file_path:str)->List[str]:
 
 
 setup(
-name='mlproject',
+name='LT-seq2seq',
 version='0.0.1',
 author='Affaan',
 author_email='affaan19@gmail.com',
