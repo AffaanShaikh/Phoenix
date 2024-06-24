@@ -21,9 +21,9 @@ def get_requirements(file_path:str)->List[str]:
 
 setup(
 name='LT-seq2seq',
-version='0.0.1',
+version='0.1.0',
 author='Affaan',
-author_email='affaan19@gmail.com',
+author_email='affaan2k2@gmail.com',
 packages=find_packages(),
 install_requires=get_requirements('requirements.txt'),
 )
