@@ -1,4 +1,4 @@
-from setuptools import find_packages,setup
+from setuptools import find_packages, setup
 from typing import List
 
 editable_package = '-e .'
@@ -20,8 +20,8 @@ def get_requirements(file_path:str)->List[str]:
 
 
 setup(
-name='LT-seq2seq',
-version='0.1.0',
+name='Pheonix',
+version='1.0.0',
 author='Affaan',
 author_email='affaan2k2@gmail.com',
 packages=find_packages(),
