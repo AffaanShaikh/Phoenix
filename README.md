@@ -1,4 +1,4 @@
-# Developing Machine Translation Systems: English-German Language translation
+# Phoenix: The English-to-German Language translation model
 
 ## Project overview
 
