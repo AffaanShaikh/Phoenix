@@ -1,0 +1,9 @@
+{
+  "exact_match_accuracy": 0.0002,
+  "average_CER": 0.7788442429712205,
+  "num_test_samples": 10000,
+  "avg_pred_length": 26.1068,
+  "avg_ref_length": 21.88,
+  "truncation_count": 0,
+  "timestamp": "2026-02-02T14:35:16.786314"
+}

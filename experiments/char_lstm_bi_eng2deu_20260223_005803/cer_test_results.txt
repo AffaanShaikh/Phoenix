@@ -1,0 +1,5 @@
+len (0, 10): n=247 meanCER=0.6782549322023007
+len (11, 20): n=9753 meanCER=0.4817664214774345
+len (21, 30): n=0 meanCER=None
+len (31, 50): n=0 meanCER=None
+len (51, 999): n=0 meanCER=None
