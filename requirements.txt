@@ -1,5 +1,6 @@
-setuptools
-numpy
-pandas
-keras 
-tensorflow
+setuptools==80.10.2
+numpy==2.4.2
+pandas==2.3.3
+keras==3.13.2
+tensorflow==2.20.0
+streamlit==1.54.0

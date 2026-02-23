@@ -1,0 +1,33 @@
+GREEDY:
+2026-02-21 15:32:31,226 INFO Batch evaluation results: {
+  "num_samples": 6,
+  "average_CER": 0.6061904761904762,
+  "exact_match_accuracy": 0.0,
+  "avg_pred_length": 25.666666666666668,
+  "avg_ref_length": 24.333333333333332,
+  "beam_width": 1,
+  "timestamp": "2026-02-21T15:32:31.226899"
+}
+{"source": "I loved her.", "reference": "Ich liebte sie.", "prediction": "Ich liebe dich."}
+{"source": "I can't be late.", "reference": "Ich darf nicht zu spät sein.", "prediction": "Ich kann nicht schön ein Hause."}
+{"source": "It may snow today.", "reference": "Es könnte heute schneien.", "prediction": "Es macht mich sehr gesehen."}
+{"source": "He studied abroad.", "reference": "Er hat im Ausland studiert.", "prediction": "Er hat sich ein Auto gesehen."}
+{"source": "My bags are packed.", "reference": "Meine Taschen sind gepackt.", "prediction": "Mein Ha-s ist beschäftigt."}
+{"source": "Sorry for your loss.", "reference": "Mein herzliches Beileid.", "prediction": "Bleiben Sie die Weite Tom."}
+
+BEAM SEARCH:
+2026-02-21 15:31:04,626 INFO Batch evaluation results: {
+  "num_samples": 6,
+  "average_CER": 0.5556128747795415,
+  "exact_match_accuracy": 0.0,
+  "avg_pred_length": 24.166666666666668,
+  "avg_ref_length": 24.333333333333332,
+  "beam_width": 3,
+  "timestamp": "2026-02-21T15:31:04.626068"
+}
+{"source": "I loved her.", "reference": "Ich liebte sie.", "prediction": "Ich liebe dich."}
+{"source": "I can't be late.", "reference": "Ich darf nicht zu spät sein.", "prediction": "Ich kann es nicht sehen."}
+{"source": "It may snow today.", "reference": "Es könnte heute schneien.", "prediction": "Es könnte nicht sehen."}
+{"source": "He studied abroad.", "reference": "Er hat im Ausland studiert.", "prediction": "Er hat seinen Schlüssel gesehen."}
+{"source": "My bags are packed.", "reference": "Meine Taschen sind gepackt.", "prediction": "Meine Frau ist ein Beiter."}
+{"source": "Sorry for your loss.", "reference": "Mein herzliches Beileid.", "prediction": "Bleiben Sie sie nicht aus."}

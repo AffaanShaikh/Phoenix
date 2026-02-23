@@ -1,0 +1,10 @@
+{
+  "direction": "eng2deu",
+  "exact_match_accuracy": 0.0257,
+  "average_CER": 0.48661968769233865,
+  "num_test_samples": 10000,
+  "avg_pred_length": 16.1846,
+  "avg_ref_length": 16.9328,
+  "truncation_count": 12,
+  "timestamp": "2026-02-23T00:58:03.478376"
+}
