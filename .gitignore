@@ -162,4 +162,5 @@ cython_debug/
 commands.txt
  
 garbage/
-dataset/
+data/
+src/dataset/
