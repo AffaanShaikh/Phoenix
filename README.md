@@ -1,4 +1,7 @@
 # Phoenix: The English-to-German Language translation model
+Live [here](https://phoenix-2fmz4masnav4posdjnd8gf.streamlit.app/) 
+NOTE: _Deutsch to English_ translation available only, use via 'English to German', ik its in works ;)
+
 ### ver. 1.2.3
 - added beam search decoding replacing bad performance amplifying greedy search 
 - added bidirectional translation, dropout layers and adaptive learning rate
