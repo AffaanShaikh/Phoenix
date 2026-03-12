@@ -1,0 +1,9 @@
+{
+  "direction": "deu2eng",
+  "average_CER": 0.31525354875989164,
+  "exact_match_accuracy": 0.2774,
+  "num_test_samples": 10000,
+  "avg_pred_length": 16.4537,
+  "avg_ref_length": 16.9328,
+  "timestamp": "2026-03-09T18:38:09.730218"
+}

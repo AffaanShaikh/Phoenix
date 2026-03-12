@@ -631,7 +631,7 @@ def run_pipeline(direction: str = "deu2eng", data_path_local: str = data_path, c
 
     # Prepare data
     logger.info("Step 1: Preparing data")
-    exchangeLanguage = True if direction == "eng2deu" else False
+    exchangeLanguage = False if direction == "eng2deu" else True
     prep = DataPreprocessor(data_path=data_path_local, num_samples=set_num_samples)
     (
         encoder_input_data,
@@ -757,5 +757,5 @@ def run_pipeline(direction: str = "deu2eng", data_path_local: str = data_path, c
 
 if __name__ == "__main__":
     logger.info("Training initiated.")
-    run_pipeline(direction="deu2eng")  # or "eng2deu" 
+    run_pipeline(direction="eng2deu")  # or "deu2eng" 
     logger.info("Training finished.")

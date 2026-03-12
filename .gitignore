@@ -163,4 +163,7 @@ commands.txt
  
 garbage/
 data/
+src/components/
 src/dataset/
+src/logs/
+src/old_models/

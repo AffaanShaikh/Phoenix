@@ -21,7 +21,7 @@ def get_requirements(file_path:str)->List[str]:
 
 setup(
 name='Pheonix',
-version='1.2.4',
+version='1.3.0',
 author='Affaan',
 author_email='affaan2k2@gmail.com',
 packages=find_packages(),
