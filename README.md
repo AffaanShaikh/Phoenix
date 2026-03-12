@@ -1,11 +1,34 @@
 # Phoenix: The English-to-German Language translation model
+### ver. 1.3.0
+- switched to subword tokenization (SentencePiece) with learned embeddings and attention, improving decoded seq. length, enabling distributed subword representations, and letting the decoder focus on relevant encoder positions. 
+
+- added LR warmup via WarmUpLRCallback: linearly ramp LR from warmup_initial_lr to peak_lr over warmup_epochs, compiled at the warmup start LR so ReduceLROnPlateau can take over after warmup without conflict.
+
+- split training vs. evaluation: eval_only now loads the persisted token_tool and encodes the test set directly (no redundant SPM training/tokenization), ensuring consistency with saved models.
+
+- preload the SentencePiece processor once for decoding to eliminate O(N) per-sample disk reads during eval (now, single file load: O(1)).
+
+- reusing layers during inference correctly: fixed inference graph construction by creating fresh Input tensors and calling layer objects (sharing weights) rather than reusing training graph tensors, removing Keras graph-ambiguity failures.
+
+- interface normalization: serialized Keras tokenizer as JSON ("keras_tokenizer_json") instead of pickling raw Tokenizer objects to ensure cross-version compatibility and reliable restore.
+
+- streamlit app updated to support both char-level and subword-level tokenization and to present a normalized tokenizer interface for inference.
+
+- miscellaneous:
+    - eliminated data leakage, split raw texts (seed=42, test_ratio=0.2) before tokenization and train SPM exclusively on the training partition, removed post-tokenization index splitting.
+    - exposed module hyperparameters to CLI 
+    - replaced one-hot targets with SparseCategoricalCrossentropy to cut memory use.
+
+
 ### ver. 1.2.3
 - added beam search decoding replacing bad performance amplifying greedy search 
 - added bidirectional translation, dropout layers and adaptive learning rate
 
+
 ### ver. 1.2.0
 - model retrained using dropout, better hyperparameters and regularization
 - suffered from exposure bias i.e. stronger decoder compared to encoder
+
 
 ## Project overview
 
