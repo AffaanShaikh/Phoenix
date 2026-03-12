@@ -1,119 +1,326 @@
 import streamlit as st
 import numpy as np
-import keras
+import os
 import pickle
- 
-MODEL_DIR = "src/trained_models"
+import logging
+from pathlib import Path
+import heapq
 
-# util func.
+# try to import tensorflow.keras from tensorflow if available, fallback to keras
+try:
+    from tensorflow import keras
+except Exception:
+    import keras
+
+# try to import sentencepiece
+try:
+    import sentencepiece as spm
+    HAVE_SPM = True
+except Exception:
+    HAVE_SPM = False
+
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger("streamlit_app_infer")    
+MODEL_DIR = Path(__file__).parent.parent / "trained_models" # where .keras and token_tool_*.pkl are
+
+# helpers to load resources (cached)
 @st.cache_resource
-def load_models(direction):
-    encoder = keras.models.load_model(f"{MODEL_DIR}/encoder_model_{direction}.keras")
-    decoder = keras.models.load_model(f"{MODEL_DIR}/decoder_model_{direction}.keras")
+def load_token_tool(direction: str):
+    """
+    loads token_tool_{direction}.pkl which is expected to contain (token_tool, max_enc_len, max_dec_len, input_vocab_size, target_vocab_size)
+    token_tool is either:
+      - ("sentencepiece", sp_model_path)            saved by train.py (all versions)
+      - ("keras_tokenizer_json", json_str)          saved by updated train.py (current)
+      - ("keras_tokenizer", tokenizer_obj)          legacy format from older train.py
 
-    with open(f"{MODEL_DIR}/char2encoding_{direction}.pkl", "rb") as f:
-        input_token_index = pickle.load(f)
-        max_encoder_seq_length = pickle.load(f)
-        num_encoder_tokens = pickle.load(f)
-        reverse_target_char_index = pickle.load(f)
-        num_decoder_tokens = pickle.load(f)
-        target_token_index = pickle.load(f)
+    Downstream functions in this app will always receive one of two normalized tuples:
+      - ("sentencepiece", model_path, sp_instance)  for SentencePiece
+      - ("keras_tokenizer", tok)                    for Keras tokenizer (both new and legacy)
+    """
+    p = MODEL_DIR / f"token_tool_{direction}.pkl"
+    if not p.exists():
+        raise FileNotFoundError(f"token_tool file not found: {p}")
+    with open(p, "rb") as f: # loading sequentially in same order as was saved during training 
+        token_tool = pickle.load(f)
+        max_enc_len = pickle.load(f)
+        max_dec_len = pickle.load(f)
+        input_vocab_size = pickle.load(f)
+        target_vocab_size = pickle.load(f)
+    # if token_tool using sentencepiece: instantiate processor
+    if isinstance(token_tool, tuple) and token_tool[0] == "sentencepiece":
+        model_path = token_tool[1]
+        if not Path(model_path).exists(): 
+            alt = MODEL_DIR / Path(model_path).name
+            if alt.exists():
+                model_path = str(alt)
+            else:
+                raise FileNotFoundError(f"SentencePiece model not found at {model_path} or {alt}")
+        sp = spm.SentencePieceProcessor()
+        sp.Load(model_path)
+        return ("sentencepiece", model_path, sp), max_enc_len, max_dec_len, input_vocab_size, target_vocab_size
 
-    return (
-        encoder,
-        decoder,
-        input_token_index,
-        max_encoder_seq_length,
-        num_encoder_tokens,
-        reverse_target_char_index,
-        num_decoder_tokens,
-        target_token_index,
-    )
 
-# enc.
-def encode_input(sentence, input_token_index, max_len, num_tokens):
-    x = np.zeros((1, max_len, num_tokens), dtype="float32")
-    for t, char in enumerate(sentence):
-        if t < max_len and char in input_token_index:
-            x[0, t, input_token_index[char]] = 1.0
-    return x
+    # since the updated trainer serializes the Keras tokenizer as a JSON string ("keras_tokenizer_json")
+    # rather than pickling the raw object ("keras_tokenizer"), because raw Tokenizer objects
+    # are not reliably picklable across Keras versions and the class is deprecated in newer Keras,
+    # we'll deserialize back to a Tokenizer object here so all downstream functions are unchanged
+    if isinstance(token_tool, tuple) and token_tool[0] == "keras_tokenizer_json":
+        json_str = token_tool[1]
+        try:
+            tok = keras.preprocessing.text.tokenizer_from_json(json_str)
+        except AttributeError:
+            # tokenizer_from_json not available in very old Keras builds: fall back to eval-based restore
+            logger.warning("tokenizer_from_json not available, attempting manual JSON restore")
+            import json as _json
+            cfg = _json.loads(json_str)
+            tok = keras.preprocessing.text.Tokenizer()
+            tok.word_index = cfg.get("word_index", {})
+            tok.index_word = {int(v): k for k, v in tok.word_index.items()}
+        return ("keras_tokenizer", tok), max_enc_len, max_dec_len, input_vocab_size, target_vocab_size
 
-# (greedy) decode
-def decode_sequence(input_seq, encoder_model, decoder_model,
-                    num_decoder_tokens, target_token_index,
-                    reverse_target_char_index, max_len=100):
+    # legacy format: raw Keras Tokenizer object was pickled directly
+    if isinstance(token_tool, tuple) and token_tool[0] == "keras_tokenizer":
+        tok = token_tool[1]
+        # ensure tokenizer has index_word mapping (Keras Tokenizer has index_word attribute)
+        return ("keras_tokenizer", tok), max_enc_len, max_dec_len, input_vocab_size, target_vocab_size
 
-    states_value = encoder_model.predict(input_seq, verbose=0)
+    raise RuntimeError("Unrecognized token_tool structure in token_tool pickle.")
 
-    target_seq = np.zeros((1, 1, num_decoder_tokens))
-    target_seq[0, 0, target_token_index['\t']] = 1.0
+@st.cache_resource
+def load_inference_models(direction: str):
+    """
+    loads encoder_model_{direction}.keras and decoder_model_{direction}.keras (i.e. the inference models)
+    """
+    enc_path = MODEL_DIR / f"encoder_model_{direction}.keras"
+    dec_path = MODEL_DIR / f"decoder_model_{direction}.keras"
+    if not enc_path.exists() or not dec_path.exists():
+        raise FileNotFoundError(f"Missing inference models. Expected {enc_path} and {dec_path}")
+    # load w/o compiling, for speed
+    encoder = keras.models.load_model(str(enc_path), compile=False)
+    decoder = keras.models.load_model(str(dec_path), compile=False)
+    return encoder, decoder
 
-    decoded = ""
+# enc-dec utlil.(s)
+def encode_sentence_to_ids(sentence: str, token_tool_tuple, max_enc_len: int):
+    """
+    encode a raw string into padded token id sequence (1D numpy array) for model input,
+    for SentencePiece we rely on pad_id=0, for Keras tokenizer we use 0 as pad token too
+    """
+    tool_type = token_tool_tuple[0]
+    if tool_type == "sentencepiece":
+        sp = token_tool_tuple[2] # token_tool_tuple = ("sentencepiece", model_path, sp_instance)
+        ids = sp.EncodeAsIds(sentence) # sp: instance of SentencePieceProcessor
+    else:
+        tok = token_tool_tuple[1] # ("keras_tokenizer", tok)
+        seqs = tok.texts_to_sequences([sentence]) # tok: instance of keras.preprocessing.text.Tokenizer
+        ids = seqs[0] if seqs else []
 
-    for _ in range(max_len):
-        output_tokens, h, c = decoder_model.predict(
-            [target_seq] + states_value, verbose=0
-        )
+    # truncate and pad post
+    if len(ids) >= max_enc_len:
+        ids_trunc = ids[:max_enc_len]
+    else:
+        ids_trunc = ids + [0] * (max_enc_len - len(ids))
+    return np.array([ids_trunc], dtype=np.int32)
 
-        idx = np.argmax(output_tokens[0, -1, :])
-        char = reverse_target_char_index[idx]
+def ids_to_text(decoded_ids: list, token_tool_tuple):
+    """
+    convert decoded id list back to text string,
+        For SentencePiece: use sp.DecodeIds
+        For Keras tokenizer: reconstruct text using index_word map
+    """
+    if token_tool_tuple[0] == "sentencepiece":
+        sp = token_tool_tuple[2]
+        return sp.DecodeIds(decoded_ids)
+    else:
+        tok = token_tool_tuple[1]
+        inv = getattr(tok, "index_word", None)
+        if inv is None:
+            # fallback reconstruct
+            inv = {v: k for k, v in tok.word_index.items()}
+        words = [inv.get(i, "") for i in decoded_ids if i != 0]
+        return " ".join(w for w in words if w)
 
-        if char == "\n":
+def greedy_decode_token(encoder_model, decoder_model, token_tool_tuple, input_seq_ids, max_dec_len: int):
+    """
+    Greedy decode using inference encoder/decoder models,
+    - encoder_model returns [encoder_outputs, state_h, state_c]
+    - decoder_model expects [decoder_token_input, prev_h, prev_c, encoder_outputs] -> [probs, next_h, next_c]
+    """
+    # encode
+    enc_outs, h, c = encoder_model.predict(input_seq_ids, verbose=0)
+    # BOS/EOS ids
+    if token_tool_tuple[0] == "sentencepiece":
+        BOS_ID = 2
+        EOS_ID = 3
+    else:
+        tok = token_tool_tuple[1]
+        # try common keys
+        bos_id = tok.word_index.get("<bos>") or tok.word_index.get("bos") or 1
+        eos_id = tok.word_index.get("<eos>") or tok.word_index.get("eos") or 1
+        BOS_ID, EOS_ID = int(bos_id), int(eos_id)
+    decoded_ids = []
+    cur_tok = np.array([[BOS_ID]], dtype=np.int32)
+    prev_h, prev_c = h, c
+    for _ in range(max_dec_len):
+        preds, next_h, next_c = decoder_model.predict([cur_tok, prev_h, prev_c, enc_outs], verbose=0)
+        # preds shape (1, 1, vocab)
+        prob = preds[0, -1, :]
+        idx = int(np.argmax(prob))
+        if idx == EOS_ID:
             break
+        decoded_ids.append(idx)
+        cur_tok = np.array([[idx]], dtype=np.int32)
+        prev_h, prev_c = next_h, next_c
+    # convert ids -> text
+    return ids_to_text(decoded_ids, token_tool_tuple), decoded_ids
 
-        decoded += char
+def beam_decode_token(encoder_model, decoder_model, token_tool_tuple, input_seq_ids, max_dec_len: int, beam_width: int = 3):
+    """
+    beam search implementation for the token-level inference decoder,
+        Beam entries: (log_prob, token_list, prev_h, prev_c)
+    We keep states for each beam (they come from decoder predictions)
+    """
+    enc_outs, h0, c0 = encoder_model.predict(input_seq_ids, verbose=0)
+    # BOS/EOS ids
+    if token_tool_tuple[0] == "sentencepiece":
+        BOS_ID, EOS_ID = 2, 3
+    else:
+        tok = token_tool_tuple[1]
+        bos_id = tok.word_index.get("<bos>") or tok.word_index.get("bos") or 1
+        eos_id = tok.word_index.get("<eos>") or tok.word_index.get("eos") or 1
+        BOS_ID, EOS_ID = int(bos_id), int(eos_id)
 
-        target_seq = np.zeros((1, 1, num_decoder_tokens))
-        target_seq[0, 0, idx] = 1.0
+    # initial beam
+    beam = [(0.0, [BOS_ID], h0, c0)]
+    completed = []
 
-        states_value = [h, c]
+    for _ in range(max_dec_len):
+        candidates = []
 
-    return decoded
+        # Separate predict call per beam (improved on w/ single batch below)
+        # for logp, seq_ids, prev_h, prev_c in beam:
+        #     last = seq_ids[-1]
+        #     if last == EOS_ID:
+        #         # already completed: keep as is
+        #         completed.append((logp, seq_ids))
+        #         continue
+        #     cur_tok = np.array([[last]], dtype=np.int32)
+        #     preds, next_h, next_c = decoder_model.predict([cur_tok, prev_h, prev_c, enc_outs], verbose=0)
+        #     probs = preds[0, -1, :] # (vocab,)
+        #     # take top-K
+        #     topk = np.argsort(probs)[-beam_width:]
+        #     for idx in topk:
+        #         p = float(probs[idx])
+        #         new_logp = logp + np.log(p + 1e-12)
+        #         new_seq = seq_ids + [int(idx)]
+        #         candidates.append((new_logp, new_seq, next_h, next_c))
 
-# UI
-st.set_page_config(page_title="In-house Language Translation", layout="centered")
+        # Single batched predict for all active beams
+        # split completed beams out before batching
+        active = [(lp, seq, h, c) for lp, seq, h, c in beam if seq[-1] != EOS_ID]
+        completed.extend([(lp, seq) for lp, seq, h, c in beam if seq[-1] == EOS_ID])
+        if not active: break
+        n_active = len(active)
+        # tile enc_outs once for all active beams -> (n_active, seq_len, hidden)
+        enc_outs_tiled = np.tile(enc_outs, (n_active, 1, 1))
+        # batch all active beam inputs batched
+        cur_toks = np.array([[seq[-1]] for _, seq, _, _ in active], dtype=np.int32) # (n_active, 1)
+        hs = np.concatenate([h for _, _, h, _ in active], axis=0) # (n_active, hidden)
+        cs = np.concatenate([c for _, _, _, c in active], axis=0) # (n_active, hidden)
+        # single forward pass for ALL beams
+        preds, next_hs, next_cs = decoder_model.predict(
+            [cur_toks, hs, cs, enc_outs_tiled], verbose=0
+        ) # preds: (n_active, 1, vocab)
+        for i, (logp, seq_ids, _, _) in enumerate(active):
+            probs = preds[i, -1, :]
+            topk = np.argsort(probs)[-beam_width:]
+            next_h_i = next_hs[i : i + 1] # keep dims: (1, hidden)
+            next_c_i = next_cs[i : i + 1]
+            for idx in topk:
+                p = float(probs[idx])
+                new_logp = logp + np.log(p + 1e-12)
+                candidates.append((new_logp, seq_ids + [int(idx)], next_h_i, next_c_i))
+        # top beam_width candidates choosen
+        if not candidates:
+            break
+        beam = heapq.nlargest(beam_width, candidates, key=lambda x: x[0])
 
-st.title("Seq2Seq Language Translator (English <-> Deutsch)")
-st.markdown("Character-level LSTM-based translator trained on 50k sentence pairs.")
+        # # stop early if many completed
+        # if len(completed) >= beam_width:
+        #     break
+        # stop only when best completed sequence beats all active beams
+        # (no active beam can ever outscore it, so further expansion is pointless)
+        if completed:
+            best_completed_score = max(c[0] for c in completed)
+            best_active_score = max(b[0] for b in beam)
+            if best_completed_score >= best_active_score:
+                break
 
-direction = st.radio(
-    "Translation Direction",
-    ["English to German", "Deutsch zu Englisch"]
+
+    # choose best completed if any, else best partial
+    if completed:
+        best = max(completed, key=lambda x: x[0])[1]
+    else:
+        best = max(beam, key=lambda x: x[0])[1]
+
+    # remove leading BOS and trailing EOS if present
+    res_ids = [i for i in best if i not in (BOS_ID, EOS_ID)]
+    return ids_to_text(res_ids, token_tool_tuple), res_ids
+
+# ui
+st.set_page_config(page_title="Seq2Seq MT - a Phoenix model", layout="centered")
+st.title("Machine Translation (Seq2Seq)")
+st.markdown(
+    """
+    Runs inference using token-level encoder/decoder + attention models,
+    \nmodels expected in `trained_models/`:-
+    \n- encoder_model_{direction}.keras
+    \n- decoder_model_{direction}.keras
+    \n- token_tool_{direction}.pkl (contains token_tool metadata)
+    \nDirections being: `deu2eng` OR `eng2deu`
+    """
 )
-direction_key = "eng2deu" if direction == "English to German" else "deu2eng"
-# load models and token indices
-(
-    encoder_model,
-    decoder_model,
-    input_token_index,
-    max_len,
-    num_encoder_tokens,
-    reverse_target_char_index,
-    num_decoder_tokens,
-    target_token_index,
-) = load_models(direction_key)
 
-# Input
-user_input = st.text_area("Enter sentence:")
+direction_human = st.radio("Translation direction", ("Deutsch -> Englisch (deu2eng)", "English -> German (eng2deu)"))
+direction = "deu2eng" if "deu2eng" in direction_human else "eng2deu"
+
+# loading resources
+try:
+    token_tool_tuple, max_enc_len, max_dec_len, input_vocab_size, target_vocab_size = load_token_tool(direction)
+    encoder_model, decoder_model = load_inference_models(direction)
+except Exception as e:
+    st.error(f"Failed to load models or token tool: {e}")
+    raise
+
+st.sidebar.markdown("### Inference options")
+decode_method = st.sidebar.selectbox("Decoding technique to use..", ("greedy", "beam"))
+beam_width = st.sidebar.slider("Beam width (when using beam)", min_value=2, max_value=12, value=3, step=1)
+show_ids = st.sidebar.checkbox("Show decoded token ids", value=False)
+max_decode_len = st.sidebar.number_input("Max decode length", min_value=10, max_value=500, value=int(max_dec_len))
+
+# input box
+text = st.text_area("Enter text to translate", value="", height=120)
 
 if st.button("Translate"):
-    if user_input.strip() == "":
-        st.warning("Please enter a sentence.")
+    if not text.strip():
+        st.warning("Don't you forget to put in the sentence to translate dummy ;)")
     else:
-        input_seq = encode_input(
-            user_input,
-            input_token_index,
-            max_len,
-            num_encoder_tokens
-        )
+        try:
+            input_seq = encode_sentence_to_ids(text, token_tool_tuple, max_enc_len)
+            if decode_method == "greedy":
+                out_text, out_ids = greedy_decode_token(encoder_model, decoder_model, token_tool_tuple, input_seq, max_decode_len)
+            else:
+                out_text, out_ids = beam_decode_token(encoder_model, decoder_model, token_tool_tuple, input_seq, max_decode_len, beam_width=beam_width)
+            st.subheader("Translation:-")
+            st.success(out_text)
+            if show_ids:
+                st.write({"token_ids": out_ids})
+        except Exception as e:
+            st.error(f"Inference failed: {e}")
+            logger.exception("Inference error")
 
-        output = decode_sequence(
-            input_seq,
-            encoder_model,
-            decoder_model,
-            num_decoder_tokens,
-            target_token_index,
-            reverse_target_char_index
-        )
-
-        st.success(output)
+st.markdown("---")
+st.markdown("Model files found & available:-")
+st.write(str(MODEL_DIR / f"encoder_model_{direction}.keras"))
+st.write(str(MODEL_DIR / f"decoder_model_{direction}.keras"))
+st.write(str(MODEL_DIR / f"token_tool_{direction}.pkl"))
