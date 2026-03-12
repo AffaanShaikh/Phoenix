@@ -4,24 +4,98 @@ import os
 import pickle
 import logging
 from pathlib import Path
-import heapq
-
-# try to import tensorflow.keras from tensorflow if available, fallback to keras
-try:
+import heapq, shutil
+ 
+try: # tensorflow.keras from tensorflow if available, fallback to keras
     from tensorflow import keras
 except Exception:
-    import keras
-
-# try to import sentencepiece
+    import keras 
 try:
     import sentencepiece as spm
     HAVE_SPM = True
 except Exception:
     HAVE_SPM = False
+try: # HF hub for larger models
+    from huggingface_hub import snapshot_download
+except Exception:
+    snapshot_download = None
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger("streamlit_app_infer")    
 MODEL_DIR = Path(__file__).parent.parent / "trained_models" # where .keras and token_tool_*.pkl are
+
+# fetch the req. model files from HFHub into MODEL_DIR
+@st.cache_resource
+def ensure_models_present(direction: str):
+    """
+    ensures encoder_model_{direction}.keras, decoder_model_{direction}.keras and token_tool_{direction}.pkl
+    are present under src/trained_models/. If any are missing, attempt to download from a Hugging Face repo.
+    Repo. selection priority:
+     1) HF_REPO_{DIRECTION} (e.g. HF_REPO_DEU2ENG)
+     2) HF_REPO
+     3) If neither set: do nothing (function will later cause FileNotFoundError in loader)
+    """
+    required_files = [
+        f"encoder_model_{direction}.keras",
+        f"decoder_model_{direction}.keras",
+        f"token_tool_{direction}.pkl",
+    ]
+
+    # quick local check
+    missing = [f for f in required_files if not (MODEL_DIR / f).exists()]
+    if not missing:
+        logger.debug("All model files present locally.")
+        return {"status": "ok", "missing": []}
+
+    # pick repo id from env
+    env_repo_key = f"HF_REPO_{direction.upper()}"
+    repo_id = os.getenv(env_repo_key) or os.getenv("HF_REPO")
+    hf_token = os.getenv("HF_TOKEN")  # (opt. but def. for private repos)
+    if not repo_id:
+        logger.debug(f"Missing files {missing} and no HF_REPO env var set.")
+        return {"status": "missing_repo_env", "missing": missing}
+
+    if snapshot_download is None:
+        logger.error("huggingface_hub.snapshot_download not available; please install huggingface-hub")
+        return {"status": "hf_not_installed", "missing": missing}
+
+    st.info(f"Missing files: {', '.join(missing)} — attempting download from Hugging Face repo `{repo_id}`")
+    try:
+        # download the entire repo snapshot (huggingface_hub caches)
+        dl_dir = snapshot_download(repo_id, use_auth_token=hf_token)
+    except Exception as e:
+        logger.exception("snapshot_download failed")
+        return {"status": "download_failed", "error": str(e), "missing": missing}
+
+    dl_path = Path(dl_dir)
+    copied = []
+    not_found = []
+    # attempt to locate each required file in downloaded repo (search recursively)
+    for fname in required_files:
+        # first check root
+        candidate = dl_path / fname
+        if candidate.exists():
+            dest = MODEL_DIR / fname
+            shutil.copy2(candidate, dest)
+            copied.append(fname)
+            continue
+        # else search anywhere inside the downloaded snapshot
+        found = None
+        for p in dl_path.rglob(fname):
+            found = p
+            break
+        if found:
+            shutil.copy2(found, MODEL_DIR / fname)
+            copied.append(fname)
+        else:
+            not_found.append(fname)
+
+    if not_found:
+        logger.warning(f"Downloaded repo `{repo_id}` but could not find: {not_found}")
+        return {"status": "incomplete", "missing": not_found, "copied": copied}
+
+    logger.debug(f"Copied files from HF repo: {copied}")
+    return {"status": "ok", "copied": copied}
 
 # helpers to load resources (cached)
 @st.cache_resource
@@ -54,7 +128,13 @@ def load_token_tool(direction: str):
             if alt.exists():
                 model_path = str(alt)
             else:
+                # As a convenience: if HF snapshot placed the spm elsewhere (e.g. subfolder),
+                # try to find it inside MODEL_DIR and repo cache
+                # (the HF snapshot step copies only files with matching names to MODEL_DIR,
+                # so the alt check should usually succeed)
                 raise FileNotFoundError(f"SentencePiece model not found at {model_path} or {alt}")
+        # if not HAVE_SPM:
+        #     raise RuntimeError("sentencepiece not installed but token_tool requires it. `pip install sentencepiece`")
         sp = spm.SentencePieceProcessor()
         sp.Load(model_path)
         return ("sentencepiece", model_path, sp), max_enc_len, max_dec_len, input_vocab_size, target_vocab_size
@@ -115,7 +195,7 @@ def encode_sentence_to_ids(sentence: str, token_tool_tuple, max_enc_len: int):
         seqs = tok.texts_to_sequences([sentence]) # tok: instance of keras.preprocessing.text.Tokenizer
         ids = seqs[0] if seqs else []
 
-    # truncate and pad post
+    # truncate OR pad post
     if len(ids) >= max_enc_len:
         ids_trunc = ids[:max_enc_len]
     else:
@@ -284,12 +364,29 @@ st.markdown(
 direction_human = st.radio("Translation direction", ("Deutsch -> Englisch (deu2eng)", "English -> German (eng2deu)"))
 direction = "deu2eng" if "deu2eng" in direction_human else "eng2deu"
 
+# ensure model files exist (local or from HF)
+hf_result = ensure_models_present(direction)
+if hf_result.get("status") == "missing_repo_env":
+    st.info(
+        "Some model files are missing locally. "
+        "If you want Streamlit to download them automatically, set environment variable HF_REPO or HF_REPO_{DIRECTION} "
+        "(e.g. HF_REPO_DEU2ENG) to a Hugging Face repo id that contains the files. "
+        "Set HF_TOKEN for private repos."
+    )
+elif hf_result.get("status") == "hf_not_installed":
+    st.error("The huggingface-hub package is not installed in this environment. Run `pip install huggingface-hub`.")
+elif hf_result.get("status") == "download_failed":
+    st.error(f"Hugging Face download failed: {hf_result.get('error')}")
+elif hf_result.get("status") == "incomplete":
+    st.error(f"Downloaded repo but missing files: {hf_result.get('missing')}. Copied: {hf_result.get('copied', [])}")
+
 # loading resources
 try:
     token_tool_tuple, max_enc_len, max_dec_len, input_vocab_size, target_vocab_size = load_token_tool(direction)
     encoder_model, decoder_model = load_inference_models(direction)
 except Exception as e:
     st.error(f"Failed to load models or token tool: {e}")
+    logger.exception("Model load error")
     raise
 
 st.sidebar.markdown("### Inference options")
