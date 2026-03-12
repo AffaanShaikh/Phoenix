@@ -1,4 +1,7 @@
 # Phoenix: The English-to-German Language translation model
+
+**Live [here](https://phoenix-4rsr5nzdjknz3sansqta7c.streamlit.app/)**
+
 ### ver. 1.3.0
 - switched to subword tokenization (SentencePiece) with learned embeddings and attention, improving decoded seq. length, enabling distributed subword representations, and letting the decoder focus on relevant encoder positions. 
 
