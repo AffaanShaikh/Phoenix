@@ -35,49 +35,72 @@
 
 ## Project overview
 
-The project involves a deep learning model for machine translation from English to German (and vice-versa) using a sequence-to-sequence (seq2seq) architecture with LSTM layers. The workflow spans from data preprocessing to model training and inference. Initially, the dataset is prepared by extracting characters and organizing them into one-hot vectors. This step includes both input and target texts necessary for training. The seq2seq model architecture is defined next, comprising an LSTM-based encoder-decoder structure. The encoder processes input sequences, while the decoder predicts output sequences.  Post-training, inference models are generated from the trained model to translate new input sequences. Trained weights and necessary indices are saved for future inference. The approach covers stages from data prep. to deploying a functional translation model on a streamlit app.
-
+The project involves training a deep learning model for language translation from English to German (and vice-versa) using a sequence-to-sequence (seq2seq) architecture with LSTM layers and much more. The workflow spans from dataset prep., defining seq2seq model architecture and generating inference models capable of inference via HFHub deployed Streamlit app.
 
 ## Translations & Evaluation
 
-After training the model for 100 epochs on a subset of 50k samples (out of ~277k), we evaluated translation quality on a held-out batch. 
+model trained for 100 epochs (13 w/ EarlyStopping) on a subset of 50k samples (out of ~277k), evaluated was done on a held-out batch. 
 
-* **Translation direction:** DEU -> ENG
-* **Number of test samples:** 10,000
-* **Exact match accuracy:** 0.0257
-* **Average CER (Character Error Rate):** 0.4866
-* **Average prediction length:** 16.18
-* **Average reference length:** 16.93
-* **Truncation count:** 12 
+**Translation direction:** DEU -> ENG
 
+[Format: ver. 1.3.0 (ver. 1.2.3) -> improved by]
+- **Exact match accuracy: 0.2774** (0.0257) 
+
+    -> improved by **+0.2517 absolute / +979% relative**
+- **Average CER (Character Error Rate): 0.3153** (0.4866)  
+    -> improved by **−0.1713 absolute / 35.2% error reduction**
+
+- **Average prediction length: 16.45** (16.18)  
+    -> improved by **+0.27**
+
+- **Average reference length: 16.93** (16.93)  
+    -> **no change**
+
+- **Prediction–reference gap: 0.48** (0.75)  
+    -> improved by **−0.27 / 36% closer to reference**
+
+- **Truncation count: 0** (12)  
+    -> improved by **−12 (fully eliminated)**
+ 
 These metrics reflect performance on the held-out 20% test split.
 
-### Predictions (*sq2sq_model_deu2eng.keras*)
-Decoding done with beam search.
+## Predictions
 
-| Source (Input)                                   | Reference            | Model Prediction     |
-| ------------------------------------------------ | -------------------- | -------------------- |
-| Komm schnell!                                    | Come quick!          | Come quick.          |
-| Wir sollten gehen.                               | We should go.        | We should go.        |
-| Woraus ist es gemacht?                         | What's it made from?   | What's it work?   |
-| Ich werde euch meine leihen.                     | I'll loan you mine.  | I'll lend you mine.  |
-| Tom ist echt cool.                              | Tom is really cool. | Tom is really good.      |
-| Habt ihr sie mitgebracht?                          | Did you bring it?  | Did you bring you?       |
-| Runter vom Rasen!                                 | Get off the lawn. | Get off the car.  |
-| Sind Sie zu Fuß nach Hause gegangen?                          | Did you walk home?   | Did you get home?   |
-| Sie können mich nicht entlassen.                  | You can't fire me.    | You can't stop you.     |
-| Seid ihr zu Fuß nach Hause gegangen?                                | Did you walk home?     | Did you get home OK?   |
-| Ich kann jetzt nichts essen.                                 | I can't eat now.        | I can't do that.        |
-| Lassen Sie das mich machen.                        | Let me do this.  | Let me help you.     |
-| Ich möchte auch gehen.                        | I want to go, too. | I want to see you.      | 
+*Deutsch zu Englisch*
+| Source (Input) | Reference | Model Prediction |
+|----------------|-----------|------------------|
+| Die Rechnung, bitte. | The check, please. | The bill, please. |
+| Trinkt etwas Wasser. | Drink some water. | Drink some water. |
+| Ich gieße Tee auf. | I'll make some tea. | I tead of them. |
+| Suchen Sie sich jemand anders. | Find somebody else. | Have some someone. |
+| Alle belügen mich. | Everyone lies to me. | Everybody twinked me. |
+| Zieh Leine! | Go away! | Just get lost. |
+| Ich bin arbeitslos. | I am out of work. | I'm unemployed. |
+| Meine Uhr ist defekt. | My watch is broken. | My watch is finced. |
+| Na gut! | That's fair enough. | That's good. |
+| Wann fängt es an? | When does it begin? | When will it begin? |
 
-### Observations
-- The model generates ok translations for shorter sequences.
-- Exact match accuracy remains low unfortunetly (approx. 2.6%), indicating semantic errors.
-- Prediction lengths are close to reference lengths, suggesting reasonable decoding stability.
-- CER approx. 0.49 shows moderate character-level divergence.
-- Truncation events are rare (12 / 10,000), implying minimal sequence cutoff issues.
-- To resolve bad longer predictions due to encoder's bottleneck we'll soon introduce attention.
+*English to German* 
+| Source (Input) | Reference | Model Prediction |
+|----------------|-----------|------------------|
+| Everyone likes her. | Alle haben sie gern. | Alle mögen sie. |
+| Were you sick? | Waren Sie krank? | Warst du krank? |
+| He shined his shoes. | Er wienerte seine Schuhe. | Er putzte seine Schuhe. |
+| You are blushing. | Du wirst rot! | Du bist kämpfen! |
+| We're still young. | Wir sind noch jung. | Wir sind immer noch jung. |
+| This is my world. | Das ist meine Welt. | Das ist meine CD. |
+| How are you feeling? | Wie fühlen Sie sich? | Wie geht es dir? |
+| I'm a beginner. | Ich bin Anfängerin. | Ich bin Professor. |
+| Did you bring yours? | Hast du deins mitgebracht? | Haben Sie Ihren mitgebracht? |
+| I used to love that. | Sonst hat mir das immer sehr gefallen. | Ich habe das genossen. |
+
+## Observations 
+1. Improvements with sentencepiece + attention: exact-match rose from 2.57% -> 27.74% and CER dropped 0.4866 -> 0.3153. Truncations were fully eliminated, and prediction lengths are now closer to references, showing the new tokenization and decoding pipeline fixes alignment and cutoff issues.
+
+2. **Fluency improved but semantic/lexical errors remain.** Many translations are natural and correct, yet there are still nonsensical outputs and meaning shifts (e.g., *Anfängerin* -> “Professor”), indicating surface-level generation improved but rare-word and lexical selection problems persist.
+
+3. **Remaining challenges and evaluation limits.** Pronoun/formality mismatches (EN->DE) and semantic drift occur, and metrics are based on a small 50k subset with early stopping, so results may vary on the full dataset or other test conditions; further evaluation is needed.
+
 
 ## Data
 
